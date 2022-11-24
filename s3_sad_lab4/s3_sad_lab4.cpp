@@ -17,8 +17,8 @@ enum class SearchDirection { Left, End, Right };
 template <typename T>
 struct Maybe
 {
-    bool has_data;
-    T data;
+    T it;
+    bool nothing = false;
 };
 
 class TreeNode
@@ -27,16 +27,16 @@ public:
     friend class Tree;
 
 private:
-    using ChildSlot = TreeNode*;
+    using NodeSLot = TreeNode*;
 
     data_type data;
     TreeNode* left;
     TreeNode* right;
 
-    TreeNode(data_type data) : data(data) { /* * cout << " &" << data; /* */ }
+    TreeNode(data_type data) : data(data), left(nullptr), right(nullptr) { /* * cout << " &" << data; /* */ }
     ~TreeNode() { /* * cout << " ~" << data; /* */ }
 
-    void add_child(TreeNode* child, ChildSlot* slot = nullptr)
+    void add_child(TreeNode* child, NodeSLot* slot = nullptr)
     {
         if (data == child->data)
             throw "attempt to insert a node with a value that is already contained in the tree";
@@ -50,47 +50,49 @@ private:
         *slot = child;
     }
 
-    TreeNode* rem_child(TreeNode* child)
+    TreeNode* rem_from(TreeNode* parent)
     {
-        if (child == nullptr)
-            throw "attempt to remove nullptr node";
-        if (child != left && child != right)
-            throw "attempt to remove someone else's child";
-        return rem_child(child == left ? &left : &right);
+        if (parent == nullptr)
+            throw "attempt to remove from nullptr parent";
+
+        NodeSLot* slot = (
+              this == parent->left ? &parent->left
+            : this == parent->right ? &parent->right
+            : nullptr
+        );
+
+        if (slot == nullptr)
+            throw "attempt to remove child from someone else`s parent";
+        return rem_from(slot);
     }
 
-    TreeNode* rem_child(ChildSlot* slot)
+    TreeNode* rem_from(NodeSLot* slot)
     {
         if (slot == nullptr)
             throw "attempt to remove from nullptr slot";
 
-        auto child = *slot;
-
-        if (child == nullptr)
-            throw "attempt to remove a node from an empty slot";
-
-        switch (child->child_count())
+        switch (child_count())
         {
         case 0:
             return exchange(*slot, nullptr);
 
         case 1:
-            return exchange(*slot, child->left ? child->left : child->right);
+            return exchange(*slot, left ? left : right);
             
         case 2:
 
-            TreeNode* replacement_parent;
-            if (!child->right->left)
-                replacement_parent = child;
-            else
-                replacement_parent = child->right->search([&](TreeNode* node) {
-                return node->left->left ? SearchDirection::Left : SearchDirection::End;
-            }).data;
+            TreeNode* replacement_parent = this;
 
-            auto replacement = replacement_parent->rem_child(replacement_parent->left);
+            TreeNode* replacement = right->search([&](TreeNode* node) {
+                if (!node->left)
+                    return SearchDirection::End;
+                replacement_parent = node;
+                return SearchDirection::Left;
+            }).it;
 
-            replacement->left = exchange(child->left, nullptr);
-            replacement->right = exchange(child->right, nullptr);
+            replacement->rem_from(replacement_parent);
+            replacement->left = exchange(left, nullptr);
+            replacement->right = exchange(right, nullptr);
 
             return exchange(*slot, replacement);
         }
@@ -132,10 +134,10 @@ private:
                 node = node->right;
                 break;
             case SearchDirection::End:
-                return Maybe<TreeNode*>{true, node};
+                return Maybe<TreeNode*>{node};
             }
         }
-        return Maybe<TreeNode*>{false, nullptr};
+        return Maybe<TreeNode*>{nullptr, true};
     }
 
     int child_count()
@@ -188,7 +190,7 @@ public:
                 (node->left && data < node->data) ? SearchDirection::Left :
                 (node->right && node->data < data) ? SearchDirection::Right :
                 SearchDirection::End;
-                }).data->add_child(node);
+                }).it->add_child(node);
         }
         catch(const char* error)
         {
@@ -201,28 +203,27 @@ public:
 
     void remove(data_type data)
     {
-        TreeNode* parent;
-
         if (!root)
             throw "attempt to remove a node from an empty tree";
 
         if (root->data == data)
         {
-            delete root->rem_child(&root);
+            delete root->rem_from(&root);
             return;
         }
 
-        auto maybe_child = root->search([&](auto node) {
+        TreeNode* parent;
+        auto found = root->search([&](auto node) {
             if (node->data == data)
                 return SearchDirection::End;
             parent = node;
             return data < node->data ? SearchDirection::Left : SearchDirection::Right;
             });
 
-        if (!maybe_child.has_data)
+        if (found.nothing)
             throw "attempt to remove a non-existent node";
 
-        delete parent->rem_child(maybe_child.data);
+        delete found.it->rem_from(parent);
     }
 
     void traverse(TraverseOrder order, function<bool(data_type)> callback)
@@ -234,24 +235,24 @@ public:
     Maybe<data_type> search(function<SearchDirection(data_type)> callback)
     {
         if (!root)
-            return Maybe<data_type>{false, 0};
+            return Maybe<data_type>{0, true};
         
-        auto maybe_answer = root->search([&](auto node) {return callback(node->data); });
-        return Maybe<data_type>{maybe_answer.has_data, maybe_answer.has_data ? maybe_answer.data->data : 0};
+        auto found = root->search([&](auto node) {return callback(node->data); });
+        return !found.nothing ? Maybe<data_type>{found.it->data} : Maybe<data_type>{0, true};
     }
 
     Maybe<data_type> nearest(data_type data)
     {
         if (!root)
-            return Maybe<data_type>{false, 0};
+            return Maybe<data_type>{0, true};
 
         auto nearest_node = root->search([&](auto node) {return
             (node->left && data < node->data) ? SearchDirection::Left :
             (node->right && node->data < data) ? SearchDirection::Right :
             SearchDirection::End;
-            }).data;
+            }).it;
 
-        return Maybe<data_type>{ true, nearest_node->data};
+        return Maybe<data_type>{nearest_node->data};
     }
 
     friend ostream& operator<<(ostream& output, const Tree& tree)
@@ -261,8 +262,8 @@ public:
 
     bool contains(data_type data)
     {
-        auto maybe = nearest(data);
-        return maybe.has_data && maybe.data == data;
+        auto found = nearest(data);
+        return !found.nothing && found.it == data;
     }
 };
 
@@ -363,12 +364,12 @@ void do_task()
         [](Tree* tree) {
             data_type data;
             cin >> data;
-            auto maybe = tree->nearest(data);
+            auto found = tree->nearest(data);
 
-            if (maybe.has_data)
-                cout << maybe.data << endl;
-            else
+            if (found.nothing)
                 cout << "nothing" << endl;
+            else
+                cout << found.it << endl;
         }
     },
     Command
